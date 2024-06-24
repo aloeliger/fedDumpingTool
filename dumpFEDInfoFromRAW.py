@@ -28,7 +28,7 @@ process.maxEvents = cms.untracked.PSet(
 # Seems like we don't get full fed dumps for every event
 # This prevents the tool from erroring out, and moves on to the next event
 process.options = cms.untracked.PSet(
-    SkipEvent = cms.untracked.vstring('ProductNotFound')
+    TryToContinue = cms.untracked.vstring('ProductNotFound')
 )
 
 
