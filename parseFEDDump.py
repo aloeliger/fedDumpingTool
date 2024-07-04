@@ -6,6 +6,7 @@ import re
 from rich.console import Console
 from rich.table import Table
 import math
+import ROOT
 
 console = Console()
 
@@ -92,28 +93,28 @@ def parseFED1356(eventData):
         #We read these words right to left in the DAQ
         lineNum, secondWord, firstWord = splitLine(line)
         if lineNum == '0161': # header line
-            BCID = secondWord
+            BCID = secondWord[-3:]
 
             CICADASection += line+'\n'
         if lineNum == '0162': #first CICADA line
             CICADAWord_1 = firstWord
             CICADAWord_2 = secondWord
 
+            CICADABits_1 = CICADAWord_1[0]
+            CICADABits_2 = CICADAWord_2[0]
+            
             CICADASection += line+'\n'
         if lineNum == '0163': #second CICADA line
             CICADAWord_3 = firstWord
             CICADAWord_4 = secondWord
             
-            CICADABits_1 = CICADAWord_3[0]
-            CICADABits_2 = CICADAWord_4[0]
+            CICADABits_3 = CICADAWord_3[0]
+            CICADABits_4 = CICADAWord_4[0]
             
             CICADASection += line+'\n'
         if lineNum == '0164': #third CICADA line
             CICADAWord_5 = firstWord
             CICADAWord_6 = secondWord
-
-            CICADABits_3 = CICADAWord_5[0]
-            CICADABits_4 = CICADAWord_6[0]
             
             CICADASection += line+'\n'
 
@@ -218,12 +219,76 @@ def parseFED1405(eventData):
             EventWords,
         )
     console.print(outputTable)
+
+def isValidCICADAScore(score):
+    fixedPointValue = int(score * (1<<8))
+    reconstruction = float(fixedPointValue)/(1<<8)
+    return reconstruction == score
     
-def dumpEvent(eventData, runTuple):
+def convertCICADAScoreToHex(score):
+    if not isValidCICADAScore(score):
+        console.print(":emoji-warning: [red]Emulator CICADA score appeared not to be a 16 bit fixed point number. Returning null hex[/red]")
+        return ''
+    fixedValue = int(score * (1<<8))
+    hexValue = hex(fixedValue)
+    hexValue = hexValue.split('x')
+    hexValue = hexValue[0]+'x'+'0'*(4-len(hexValue[1]))+hexValue[1]
+    return hexValue
+    
+def dumpEmulatorInfo(theFile, index):
+    #theFile.ls()
+    theTree = theFile.l1CaloSummaryEmuTree.L1CaloSummaryTree
+    #theTree.Print()
+    theTree.GetEntry(index)
+    console.print()
+    console.print('Emulator')
+    console.print()
+    theScore = theTree.CaloSummary.CICADAScore
+    console.print(f'Score: [green]{theScore:>12.8f}[/green]')
+    #console.print(f'Hex: [green]{theScore.hex():>14}[/green]')
+    CICADAHex = convertCICADAScoreToHex(theScore)
+    console.print(f'Hex: [green]{CICADAHex:>14}[/green]')
+    console.print()
+
+    console.print('Model Input:')
+    theInputArray = theTree.CaloSummary.modelInput
+    modelInputLeaf = theTree.GetLeaf('modelInput')
+    inputGrid = []
+    for iphi in range(18):
+        iPhiSlice = []
+        for ieta in range(14):
+            iPhiSlice.append(
+                int(modelInputLeaf.GetValue(iphi*14 + ieta))
+            )
+        inputGrid.append(iPhiSlice)
+    #console.print(inputGrid)
+    #displayGrid = Table.grid()
+    displayGrid = Table(show_lines=True)
+    displayGrid.add_column("iPhi / iEta")
+    for ieta in range(14):
+        displayGrid.add_column(
+            f'[cyan]{ieta}[/cyan]',
+            justify='center',
+            #min_width=3,
+            #style='black on white' if ieta%2==0 else None
+        )
+    for iphi in range(18):
+        displayGrid.add_row(
+            f'[cyan]{17-iphi}[/cyan]',
+            *[
+                f'{inputGrid[17-iphi][ieta]}' for ieta in range(14)
+            ]
+        )
+    console.print(displayGrid)
+
+def dumpEvent(index, eventData, runTuple, rootFile):
     console.rule(f'Run: {runTuple[0]:>10d}, Event: {runTuple[1]:>10d}')
     #console.print(eventData)
     parseFED1356(eventData)
     parseFED1405(eventData)
+
+    if rootFile is not None:
+        dumpEmulatorInfo(rootFile, index)
 
 def main(args):
     with open(args.file) as theFile:
@@ -235,8 +300,13 @@ def main(args):
     if len(runs) != len(eventData):
         console.log(":emoji-warning: Got a different number of parsed event numbers than parsed events")
         exit(1)
+
+    rootFile = None
+    if args.l1Ntuple is not None:
+        rootFile = ROOT.TFile(args.l1Ntuple)
+    #do the magic
     for index in range(len(eventData)):
-        dumpEvent(eventData[index], runs[index])
+        dumpEvent(index, eventData[index], runs[index], rootFile)
     #Then, for each event, we try to parse out FED #1356 and FED #1405 info
 
 if __name__ == '__main__':
@@ -246,6 +316,11 @@ if __name__ == '__main__':
         required=True,
         nargs='?',
         help='FED dump text file to dump out'
+    )
+    parser.add_argument(
+        '--l1Ntuple',
+        nargs='?',
+        help='L1 Ntuple of the corresponding events to print inputs and outputs from the emulator'
     )
 
     args = parser.parse_args()
